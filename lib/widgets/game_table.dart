@@ -13,7 +13,6 @@ class GameTable extends StatelessWidget {
   final String leftLabel;
   final String rightLabel;
 
-  final String? turnText;
   final String? wonByText;
 
   final int deckCount;
@@ -50,7 +49,6 @@ class GameTable extends StatelessWidget {
     required this.leftLabel,
     required this.rightLabel,
     required this.deckCount,
-    this.turnText,
     this.wonByText,
     this.onDeckTap,
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -109,8 +107,7 @@ class GameTable extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (turnText != null && turnText!.isNotEmpty) _InfoPill(text: turnText!),
-                    if (wonByText != null && wonByText!.isNotEmpty) ...[
+                        if (wonByText != null && wonByText!.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       _InfoPill(text: wonByText!),
                     ],
@@ -234,8 +231,6 @@ class _TrickCards extends StatelessWidget {
     final totalW = (cardW * 2) - overlapPx;
     final hasLeft = leftCard != null;
     final hasRight = rightCard != null;
-    final int count = (hasLeft ? 1 : 0) + (hasRight ? 1 : 0);
-    final double displayW = (count == 2) ? (cardW * 2 - overlapPx) : cardW;
 
     return SizedBox(
       width: totalW,

@@ -423,6 +423,8 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       tone: isTurnIndex(1) ? NameChipTone.positive : NameChipTone.neutral,
                       pulse: isTurnIndex(1),
                       active: isTurnIndex(1),
+                      showArrow: isTurnIndex(1),
+                      arrowDirection: ArrowDirection.down,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -440,7 +442,6 @@ class _GameScreenState extends ConsumerState<GameScreen>
                           leftLabel: game.players[1].nickname,
                           rightLabel: game.players[0].nickname,
                           deckCount: _dealDeckShown ?? game.deck.length,
-                          turnText: 'Turn : ${game.players[game.currentTurnIndex].nickname}',
                           wonByText: (game.lastTrickWinnerIndex != null)
                               ? 'Last Win : ${game.players[game.lastTrickWinnerIndex!].nickname}'
                               : null,
@@ -530,6 +531,8 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       tone: isTurnIndex(0) ? NameChipTone.positive : NameChipTone.neutral,
                       pulse: isTurnIndex(0),
                       active: isTurnIndex(0),
+                      showArrow: isTurnIndex(0),
+                      arrowDirection: ArrowDirection.up,
                     ),
                   ),
                   const SizedBox(height: 6),
