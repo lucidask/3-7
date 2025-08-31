@@ -420,7 +420,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     child: NameChip(
                       text: game.players[1].nickname,
                       icon: Icons.smart_toy_outlined,
-                      tone: isTurnIndex(1) ? NameChipTone.positive : NameChipTone.negative,
+                      tone: isTurnIndex(1) ? NameChipTone.positive : NameChipTone.neutral,
                       pulse: isTurnIndex(1),
                       active: isTurnIndex(1),
                     ),
@@ -527,7 +527,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     child: NameChip(
                       text: game.players[0].nickname,
                       icon: Icons.person,
-                      tone: isTurnIndex(0) ? NameChipTone.positive : NameChipTone.negative,
+                      tone: isTurnIndex(0) ? NameChipTone.positive : NameChipTone.neutral,
                       pulse: isTurnIndex(0),
                       active: isTurnIndex(0),
                     ),
