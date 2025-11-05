@@ -33,8 +33,7 @@ class GameScreen extends ConsumerStatefulWidget {
   ConsumerState<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends ConsumerState<GameScreen>
-    with WidgetsBindingObserver, TickerProviderStateMixin {
+class _GameScreenState extends ConsumerState<GameScreen> with WidgetsBindingObserver, TickerProviderStateMixin {
   final deckKey = GlobalKey();
   final tableCenterKey = GlobalKey();
   final tableLeftKey = GlobalKey();
@@ -48,6 +47,13 @@ class _GameScreenState extends ConsumerState<GameScreen>
   int _dealP1Shown = 0, _dealP2Shown = 0;
   int? _dealDeckShown;
   int? _lastDeck, _lastP1, _lastP2;
+  bool _isDrawingP1 = false;
+  bool _isDrawingP2 = false;
+
+  String? _highlightP1Key;                 // carte surlignée actuelle
+  String _cardKey(CardModel c) => '${c.suit}-${c.rank}'; // clé stable suit+rank
+
+
 
   @override
   void initState() {
@@ -98,7 +104,9 @@ class _GameScreenState extends ConsumerState<GameScreen>
       _dealP1Shown = 0;
       _dealP2Shown = 0;
       _dealDeckShown = g.deck.length;
+      _highlightP1Key = null;  // ← reset
     });
+
 
     final total = cardsPerHand * 2;
     for (var i = 0; i < total; i++) {
@@ -177,11 +185,16 @@ class _GameScreenState extends ConsumerState<GameScreen>
     final ctrl = ref.read(gameControllerProvider.notifier);
     final settings = ref.watch(settingsProvider);
     final screenH = MediaQuery.of(context).size.height;
-    final tableHeight = (screenH * 0.60).clamp(300, 700).toDouble();
+    final tableHeight = (screenH * 0.75).clamp(300, 700).toDouble();
     const baseH = 56.0;
     final targetCardH = (tableHeight / 5).clamp(50.0, 65.0);
     final slotScale = targetCardH / baseH;
     final sectionGap = (tableHeight * 0.04).clamp(8.0, 20.0);
+    final p1HandNow = ctrl.handOf('p1');
+    final p2HandNow = ctrl.handOf('p2');
+    final justDrewP1 = _lastP1 != null && p1HandNow.length > _lastP1!;
+    final justDrewP2 = _lastP2 != null && p2HandNow.length > _lastP2!;
+
 
     bool isTurnIndex(int idx) {
       final g = game;
@@ -225,6 +238,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
         final p1Drew = _lastP1 != null && curP1 > _lastP1!;
         final p2Drew = _lastP2 != null && curP2 > _lastP2!;
         if (p1Drew) {
+          setState(() => _isDrawingP1 = true);
           await GameAnimations.drawFromDeck(
             context: context,
             vsync: this,
@@ -232,8 +246,20 @@ class _GameScreenState extends ConsumerState<GameScreen>
             handKey: p1HandKey,
             cardBuilder: () => MiniCardWidget(_pickAnyForBack(), faceDown: true, dimmed: false),
           );
+          if (!mounted) return;
+          setState(() {
+            _isDrawingP1 = false;
+            final handNow = ctrl.handOf('p1');
+            if (handNow.isNotEmpty) {
+              // on surligne la carte réellement ajoutée (une fois visible en main)
+              _highlightP1Key = _cardKey(handNow.last);
+            }
+          });
+
         }
+
         if (p2Drew) {
+          setState(() => _isDrawingP2 = true);
           await GameAnimations.drawFromDeck(
             context: context,
             vsync: this,
@@ -241,6 +267,8 @@ class _GameScreenState extends ConsumerState<GameScreen>
             handKey: p2HandKey,
             cardBuilder: () => MiniCardWidget(_pickAnyForBack(), faceDown: true, dimmed: false),
           );
+          if (!mounted) return;
+          setState(() => _isDrawingP2 = false);
         }
       }
       _lastDeck = curDeck;
@@ -360,7 +388,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
         ),
         body: SafeArea(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
+            padding: const EdgeInsets.all(5.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -371,7 +399,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
                   scoreTargetPoints: settings.scoreTarget,
                   onTap: () {},
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 10),
 
                 if (showOnlyScores) ...[
                   ScoresPanel(
@@ -427,7 +455,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
                       arrowDirection: ArrowDirection.down,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 5),
 
                   SizedBox(
                     height: tableHeight,
@@ -454,9 +482,16 @@ class _GameScreenState extends ConsumerState<GameScreen>
                             handView: KeyedSubtree(
                               key: p2HandKey,
                               child: HandView(
-                                cards: _isDealing
-                                    ? ref.read(gameControllerProvider.notifier).handOf('p2').take(_dealP2Shown).toList()
-                                    : ref.read(gameControllerProvider.notifier).handOf('p2'),
+                                cards:(_isDealing)
+                                    ? p2HandNow.take(_dealP2Shown).toList()
+                                    : (() {
+                                  final hand = p2HandNow;
+                                  // Masquer la dernière carte si pioche en cours OU juste détectée
+                                  if ((justDrewP2 || _isDrawingP2) && hand.isNotEmpty) {
+                                    return hand.sublist(0, hand.length - 1);
+                                  }
+                                  return hand;
+                                })(),
                                 enabled: !_isDealing,
                                 faceDown: true,
                                 cardScale: slotScale,
@@ -478,10 +513,19 @@ class _GameScreenState extends ConsumerState<GameScreen>
                             pileOnLeft: false,
                             handView: HandView(
                               key: p1HandKey,
-                              cards: _isDealing
-                                  ? ref.read(gameControllerProvider.notifier).handOf('p1').take(_dealP1Shown).toList()
-                                  : ref.read(gameControllerProvider.notifier).handOf('p1'),
-                              enabled: !_isDealing && (game.players[game.currentTurnIndex].id == 'p1'),
+                              cards: (_isDealing)
+                                  ? p1HandNow.take(_dealP1Shown).toList()
+                                  : (() {
+                                final hand = p1HandNow;
+                                // Masquer la dernière carte si pioche en cours OU juste détectée
+                                if ((justDrewP1 || _isDrawingP1) && hand.isNotEmpty) {
+                                  return hand.sublist(0, hand.length - 1);
+                                }
+                                return hand;
+                              })(),
+                              enabled: !_isDealing
+                                  && !(_isDrawingP1 || _isDrawingP2 || justDrewP1 || justDrewP2)
+                                  && (game.players[game.currentTurnIndex].id == 'p1'),
                               faceDown: false,
                               cardScale: slotScale,
                               isPlayable: (card) => ref.read(gameControllerProvider.notifier).validateMove(card),
@@ -493,8 +537,10 @@ class _GameScreenState extends ConsumerState<GameScreen>
                                   );
                                   return;
                                 }
-                                c.playCard(card); // anim via ref.listen
+                                setState(() => _highlightP1Key = null);   // ← retire la surbrillance
+                                c.playCard(card);
                               },
+                              highlightWhen: (card) => _highlightP1Key != null && _cardKey(card) == _highlightP1Key,
                             ),
                             pile: Pile(
                               key: p1PileKey,
@@ -522,7 +568,7 @@ class _GameScreenState extends ConsumerState<GameScreen>
                     ),
                   ),
 
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 5),
 
                   Center(
                     child: NameChip(

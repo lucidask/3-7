@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:three_seven/providers/settings_provider.dart';
+import '../ai/extreme_ai_policy.dart';
+import '../ai/hard_ai_policy.dart';
+import '../ai/normal_ai_policy.dart';
 import '../models/bot_difficulty.dart';
 import '../models/game_state.dart';
 import '../models/player_model.dart';
@@ -35,20 +38,50 @@ StateNotifierProvider<GameController, GameState?>((ref) => GameController(ref));
 
 class GameController extends StateNotifier<GameState?> {
   final Ref ref;
-  GameController(this.ref) : super(null);
-  /// Replace the current game state (used when resuming a saved game).
+  late final ExtremeAiPolicy _extremePolicy;
+  late final NormalAiPolicy _normalPolicy;
+  late final HardAiPolicy _hardPolicy;
+
+  GameController(this.ref) : super(null) {
+    _extremePolicy = ExtremeAiPolicy(
+      ExtremeAiConfig(
+        rankStrength: (c) => rankStrength(c),
+        rankStrengthOfRank: (r) => rankStrengthOfRank(r),
+        determineTrickWinner: (players, two, sp) =>
+            _determineTrickWinner(players, two, sp),
+        foundNextTrickHeuristic: ({required s, required String botId, required CardModel play}) =>
+            _foundNextTrickHeuristic(s: s, botId: botId, play: play),
+      ),
+    );
+
+    _normalPolicy = NormalAiPolicy(
+      NormalAiConfig(
+        rankStrength: (c) => rankStrength(c),
+        rankStrengthOfRank: (r) => rankStrengthOfRank(r),
+        foundNextTrickHeuristic: ({required s, required String botId, required CardModel play}) =>
+            _foundNextTrickHeuristic(s: s, botId: botId, play: play),
+      ),
+    );
+    _hardPolicy = HardAiPolicy(
+      HardAiConfig(
+        rankStrength: (c) => rankStrength(c),
+        rankStrengthOfRank: (r) => rankStrengthOfRank(r),
+        foundNextTrickHeuristic: ({required s, required String botId, required CardModel play}) =>
+            _foundNextTrickHeuristic(s: s, botId: botId, play: play),
+      ),
+    );
+  }
+
   void restore(GameState restored) {
     state = restored;
     _resetVoidsByPlayer(); // purge les caches volatils du bot si tu en as
   }
 
-  /// Cancel any ongoing game and clear in-memory state.
   void cancelCurrentGame() {
     state = null;
     _voidsByPlayer.clear(); // idem, on repart propre
   }
 
-  // === Auto-save helper ===
   Future<void> _saveAuto({bool force = false}) async {
     final st = state;
     if (st == null) return;
@@ -59,11 +92,9 @@ class GameController extends StateNotifier<GameState?> {
       // If codec not ready, ignore silently; we never block gameplay.
     }
   }
-// ====== CONFIG Expert ======
-  static const int expertSamples = 384; // nombre d'échantillons Monte-Carlo (ULTRA-DUR)
-  static const int expertDepth = 3;    // profondeur en plis (bot->opp) — ULTRA-DUR
-  static const bool expertAdversarial = true; // l'IA suppose un adversaire qui répond au mieux
-
+  static const int expertSamples = 384;
+  static const int expertDepth = 3;
+  static const bool expertAdversarial = true;
   int _nextStarterIndex = -1;
   BotDifficulty _difficulty = BotDifficulty.normal;
 
@@ -172,8 +203,7 @@ class GameController extends StateNotifier<GameState?> {
     _saveAuto();
   }
 
-// Remplace l’ancienne implémentation par un simple appel à la routine commune.
-  void startNextRound() {
+ void startNextRound() {
     final st = state;
     if (st == null) return;
     if (st.matchOver) return;
@@ -181,8 +211,7 @@ class GameController extends StateNotifier<GameState?> {
     _resetRoundWithStarter(nextStarter, increment: true);
   }
 
-// Nouvelle API : relance la manche actuelle (conserve le starter initial de la manche).
-  void restartCurrentRound() {
+ void restartCurrentRound() {
     final st = state;
     if (st == null) return;
     _resetRoundWithStarter(st.startingPlayerIndex, increment: false);
@@ -478,43 +507,10 @@ class GameController extends StateNotifier<GameState?> {
     final hand = List<CardModel>.from(s.hands[botId] ?? const []);
     assert(hand.isNotEmpty);
 
-    final trick = s.currentTrick;
-    final leadSuit = trick.isEmpty ? null : trick.first.suit;
-
-    bool canFollow(CardModel c) => leadSuit == null || c.suit == leadSuit;
-    bool isAce(CardModel c) => c.rank == Rank.ace;
-
     // Groupes par couleur
     final bySuit = {for (final su in Suit.values) su: <CardModel>[]};
     for (final c in hand) { bySuit[c.suit]!.add(c); }
-    final myCount = {for (final su in Suit.values) su: bySuit[su]!.length};
 
-    // Infos adversaire
-    final botIndex = s.players.indexWhere((p) => p.id == botId);
-    final oppIndex = 1 - botIndex;
-    final oppId = s.players[oppIndex].id;
-
-    // Helper : adversaire sec ?
-    bool opponentVoidLikely(Suit suit) => _voidsByPlayer[oppId]?.contains(suit) ?? false;
-
-    // Fin de partie (pression 11) : pioche vide et ≤3 cartes par main
-    bool endgamePressure() {
-      final h0 = s.hands[s.players[0].id]?.length ?? 0;
-      final h1 = s.hands[s.players[1].id]?.length ?? 0;
-      return s.deck.isEmpty && (h0 <= 3 && h1 <= 3);
-    }
-    bool oppAtZeroSoFar() {
-      final wonOpp = s.wonCards[oppId] ?? const <CardModel>[];
-      return !wonOpp.any((c) => c.rank == Rank.ten || c.rank == Rank.nine || c.rank == Rank.ace);
-    }
-    final pressureFor11 = endgamePressure() && oppAtZeroSoFar();
-
-    // Objectif "4 As"
-    final myAces = hand.where((c) => c.rank == Rank.ace).length;
-    final aimingFourAces = myAces >= 2;
-
-    final followables = hand.where(canFollow).toList(growable: false);
-    final offSuit = hand.where((c) => !canFollow(c)).toList(growable: false);
 
     // Outils sélection (noms sans underscore pour éviter warnings)
     CardModel minSel(Iterable<CardModel> cards) {
@@ -522,235 +518,85 @@ class GameController extends StateNotifier<GameState?> {
       for (final c in cards) { final s0 = rankStrength(c); if (s0 < best) { best = s0; pick = c; } }
       return pick;
     }
-    CardModel maxSel(Iterable<CardModel> cards) {
-      CardModel pick = cards.first; var best = rankStrength(pick);
-      for (final c in cards) { final s0 = rankStrength(c); if (s0 > best) { best = s0; pick = c; } }
-      return pick;
-    }
-    CardModel? firstWinningOver(CardModel target, Iterable<CardModel> inSuit) {
-      final t = rankStrength(target);
-      CardModel? pick; int? above;
-      for (final c in inSuit) {
-        if (c.suit != target.suit) continue;
-        final s0 = rankStrength(c);
-        if (s0 > t && (above == null || s0 < above)) { above = s0; pick = c; }
-      }
-      return pick;
-    }
 
     // === NORMAL ===
     if (s.botDifficulty == BotDifficulty.normal) {
-      if (followables.isNotEmpty) {
-        if (trick.isEmpty) return minSel(followables);
-        final win = firstWinningOver(trick.first, followables);
-        return win ?? minSel(followables);
-      } else {
-        final safe = offSuit.where((c) => !isAce(c));
-        return safe.isNotEmpty ? minSel(safe) : minSel(offSuit);
-      }
+      return _normalPolicy.chooseBotCard(
+        s: s, botId: botId, voidsByPlayer: _voidsByPlayer,
+      );
     }
 
     // === HARD — Heuristiques fortes
     if (s.botDifficulty == BotDifficulty.hard) {
-      if (followables.isNotEmpty) {
-        if (trick.isEmpty) {
-          // Exploiter un void adverse sinon couleur longue (non-As si possible)
-          for (final su in Suit.values) {
-            if ((myCount[su] ?? 0) > 0 && opponentVoidLikely(su)) {
-              final inS = bySuit[su]!;
-              final low = inS.where((c) => !isAce(c)).toList();
-              return low.isNotEmpty ? minSel(low) : minSel(inS);
-            }
-          }
-          Suit? best; var cnt = -1;
-          for (final su in Suit.values) { final c = myCount[su] ?? 0; if (c > cnt) { best = su; cnt = c; } }
-          final inBest = bySuit[best]!;
-          final nonA = inBest.where((c) => !isAce(c)).toList();
-          return nonA.isNotEmpty ? minSel(nonA) : minSel(inBest);
-        } else {
-          final win = firstWinningOver(trick.first, followables);
-          if (win != null) {
-            if (isAce(win)) {
-              final alts = followables.where((c) => c.suit == trick.first.suit && rankStrength(c) > rankStrength(trick.first) && !isAce(c));
-              if (alts.isNotEmpty) return minSel(alts);
-            }
-            return win;
-          }
-          if (pressureFor11) {
-            final aces = followables.where((c) => c.suit == trick.first.suit && isAce(c) && rankStrength(c) > rankStrength(trick.first));
-            if (aces.isNotEmpty) return minSel(aces);
-          }
-          return minSel(followables);
-        }
-      } else {
-        final notVoid = offSuit.where((c) => !( _voidsByPlayer[oppId]?.contains(c.suit) ?? false)).toList();
-        final pool = notVoid.isNotEmpty ? notVoid : offSuit;
-        return pressureFor11 ? maxSel(pool) : minSel(pool);
-      }
+      return _hardPolicy.chooseBotCard(
+        s: s, botId: botId, voidsByPlayer: _voidsByPlayer,
+      );
     }
 
     // === EXTREME — Mode EXPERT (Monte-Carlo Lookahead)
-    // Fallback vers heuristiques si l'espace de recherche est minuscule (ex: 1 carte)
     if (s.botDifficulty == BotDifficulty.extreme) {
-      // Si on a 1 seule carte légale, inutile de simuler
-      final legal = followables.isNotEmpty ? followables : offSuit;
-      if (legal.length <= 1) return legal.first;
-
-      // Petite évaluation instantanée (si performance contrainte)
-      double evalHeuristicAfterPlay(CardModel play) {
-        // Favoriser: prendre 10/9/As, garder ses As si aimingFourAces, éviter de donner un pli gratuit
-        double score = 0;
-        if (trick.isNotEmpty && (leadSuit != null)) {
-          final lead = trick.first;
-          if (play.suit == lead.suit && rankStrength(play) > rankStrength(lead)) {
-            score += 2.0; // on gagne probablement le pli
-            if (play.rank == Rank.ten || play.rank == Rank.nine || play.rank == Rank.ace) score += 0.4; // gagner cher
-          } else if (play.suit != leadSuit) {
-            // défausse: se débarrasser d'une grosse perdante
-            score += (rankStrength(play) >= rankStrengthOfRank(Rank.ace)) ? 0.6 : 0.2;
-          }
-        } else {
-          // lead: éviter de brûler un As si on vise 4 As
-          if (aimingFourAces && play.rank == Rank.ace) score -= 0.8;
-          // lead dans couleur où l'adversaire est sec
-          if (opponentVoidLikely(play.suit)) score += 0.7;
-        }
-        if (pressureFor11) score += 0.5; // pression générale à favoriser les gains
-        return score;
-      }
-
-      // Génère un échantillon plausible de la main adverse
-      List<CardModel> sampleOpponentHand(Set<String> knownBotCardIds) {
-        final allIds = <String>{};
-        final allCards = <CardModel>[];
-        // Cartes du deck restant + main adverse inconnue
-        for (final c in s.deck) { allIds.add(c.id); allCards.add(c); }
-        final oppHandNow = List<CardModel>.from(s.hands[oppId] ?? const []);
-        for (final c in oppHandNow) { allIds.add(c.id); allCards.add(c); }
-        // Retire les cartes connues chez le bot
-        allCards.removeWhere((c) => knownBotCardIds.contains(c.id));
-        // Filtrer avec infos de void: si on sait que l'adversaire est sec d'une couleur, on laisse quand même
-        // quelques cartes mais on réduit la probabilité. Ici, simple échantillonnage uniforme (pas pondéré).
-        // Nombre de cartes adverses à avoir: longueur de sa main actuelle
-        final need = oppHandNow.length;
-        if (allCards.length <= need) return List<CardModel>.from(allCards);
-        final rnd = math.Random();
-        final picked = <CardModel>[];
-        final pool = List<CardModel>.from(allCards);
-        for (int i = 0; i < need; i++) {
-          final j = rnd.nextInt(pool.length);
-          picked.add(pool.removeAt(j));
-        }
-        return picked;
-      }
-
-      // Politique de réponse adverse (greedy raisonnable)
-      CardModel opponentResponse(CardModel oppLead, List<CardModel> oppHand) {
-        final followable = oppHand.where((c) => c.suit == oppLead.suit).toList();
-        if (followable.isNotEmpty) {
-          // jouer la plus petite qui gagne sinon la plus petite
-          final win = firstWinningOver(oppLead, followable);
-          return win ?? minSel(followable);
-        } else {
-          // défausse: jeter la plus forte perdante
-          return maxSel(oppHand);
-        }
-      }
-
-      // Évaluation partielle d'une position (pas scoring complet, mais valeurs fortes)
-      double evaluatePartial({required List<CardModel> wonBot, required List<CardModel> wonOpp, required bool lastTrickToBot}) {
-        int value(CardModel c) {
-          switch (c.rank) {
-            case Rank.ten: return 10;
-            case Rank.nine: return 9;
-            case Rank.ace: return 6; // As un peu moins que 9/10 mais important
-            case Rank.king: return 3;
-            case Rank.queen: return 2;
-            case Rank.jack: return 1;
-            default: return 0;
-          }
-        }
-        int sum(List<CardModel> cs) => cs.fold(0, (a, c) => a + value(c));
-        final botScore = sum(wonBot) + (lastTrickToBot ? 2 : 0); // bonus léger dernier pli
-        final oppScore = sum(wonOpp) + (!lastTrickToBot ? 2 : 0);
-        return botScore - oppScore + (pressureFor11 ? 3.0 : 0.0);
-      }
-
-      // Monte-Carlo rollouts pour chaque coup légal
-      final legalMoves = legal.toList();
-      double bestScore = -1e9; CardModel? bestMove;
-      final knownBotCardIds = hand.map((c) => c.id).toSet();
-
-      for (final m in legalMoves) {
-        double total = 0.0;
-        // quick bias par heuristique instantanée
-        total += evalHeuristicAfterPlay(m) * 1.0;
-
-        for (int sIdx = 0; sIdx < expertSamples; sIdx++) {
-          final sampleOpp = sampleOpponentHand(knownBotCardIds);
-
-          // Simule uniquement le pli courant (profondeur 1) et la réponse adverse
-          if (trick.isEmpty) {
-            // bot mène: adversaire répond
-            // Construire une main adverse simulée: utiliser sampleOpp
-            final oppReply = opponentResponse(m, sampleOpp);
-            // Qui gagne ce pli?
-            final trickSim = [m, oppReply];
-            final winIdx = _determineTrickWinner(state!.players, trickSim, state!.players.indexWhere((p)=>p.id==botId));
-            final botWins = (state!.players[winIdx].id == botId);
-            final wonBot = <CardModel>[]; final wonOpp = <CardModel>[];
-            if (botWins) { wonBot.addAll(trickSim); } else { wonOpp.addAll(trickSim); }
-            total += evaluatePartial(wonBot: wonBot, wonOpp: wonOpp, lastTrickToBot: botWins);
-          } else {
-            // adversaire a mené: notre carte m répond déjà
-            final trickSim = [trick.first, m];
-            final winIdx = _determineTrickWinner(state!.players, trickSim, state!.startingPlayerIndex);
-            final botWins = (state!.players[winIdx].id == botId);
-            final wonBot = <CardModel>[]; final wonOpp = <CardModel>[];
-            if (botWins) { wonBot.addAll(trickSim); } else { wonOpp.addAll(trickSim); }
-            total += evaluatePartial(wonBot: wonBot, wonOpp: wonOpp, lastTrickToBot: botWins);
-          }
-        }
-        final avg = total / (expertSamples + 1); // +1 pour le bias heuristique
-        if (avg > bestScore) { bestScore = avg; bestMove = m; }
-      }
-
-      if (bestMove != null) return bestMove;
-
-      // Fallback heuristique extrême si pour une raison l'échantillonnage échoue
-      if (followables.isNotEmpty) {
-        if (trick.isEmpty) {
-          // lead: éviter As si 4 As, exploiter void sinon couleur longue
-          for (final su in Suit.values) {
-            if ((myCount[su] ?? 0) > 0 && opponentVoidLikely(su)) {
-              final inS = bySuit[su]!;
-              final low = inS.where((c) => !isAce(c)).toList();
-              return low.isNotEmpty ? minSel(low) : minSel(inS);
-            }
-          }
-          Suit? best; var cnt = -1;
-          for (final su in Suit.values) { final c = myCount[su] ?? 0; if (c > cnt) { best = su; cnt = c; } }
-          final inBest = bySuit[best]!;
-          final nonA = aimingFourAces ? inBest.where((c) => !isAce(c)).toList() : inBest;
-          return minSel(nonA.isNotEmpty ? nonA : inBest);
-        }
-        final win = firstWinningOver(trick.first, followables);
-        if (win != null) return win;
-        if (pressureFor11) {
-          final aces = followables.where((c) => c.suit == trick.first.suit && isAce(c) && rankStrength(c) > rankStrength(trick.first));
-          if (aces.isNotEmpty) return minSel(aces);
-        }
-        return minSel(followables);
-      } else {
-        final notVoid = offSuit.where((c) => !( _voidsByPlayer[oppId]?.contains(c.suit) ?? false)).toList();
-        final pool = notVoid.isNotEmpty ? notVoid : offSuit;
-        return maxSel(pool); // agressif
-      }
+      final choice = _extremePolicy.chooseBotCard(
+        s: s,
+        botId: botId,
+        voidsByPlayer: _voidsByPlayer,
+      );
+      print('##########[EXTREME] bot=$botId play=${choice.suit}/${choice.rank}');
+      return choice;
     }
-
     // fallback global
     return minSel(hand);
   }
+
+  double _foundNextTrickHeuristic({
+    required GameState s,
+    required String botId,
+    required CardModel play,
+  }) {
+    if (s.findSuit == null || s.findPlayerId == null) return 0.0;
+    if (s.findPlayerId == botId) return 0.0;
+    final int trickLen = s.currentTrick.length;
+    if (trickLen > 1) return 0.0;
+
+    final Suit foundSuit = s.findSuit!;
+    final bool weLead = trickLen == 0;
+    final Suit? leadSuit = weLead ? null : s.currentTrick.first.suit;
+
+     bool isStrongInFound(CardModel c) {
+      if (c.suit != foundSuit) return false;
+      return c.rank == Rank.ten || c.rank == Rank.nine;
+    }
+
+     const double bonusLeadFoundWithStrong   = 0.55;
+    const double penaltyLeadFoundWithoutStr = -0.45;
+    const double bonusTakeOnFoundWhenFollow = 0.50;
+    const double bonusDumpSmallOnFound      = 0.15;
+    const double penaltyWasteFoundOffLead   = -0.30;
+
+    if (weLead) {
+      if (play.suit == foundSuit) {
+        // n'entame foundSuit QUE si on a vraiment de la force dedans (9/10)
+        return isStrongInFound(play) ? bonusLeadFoundWithStrong : penaltyLeadFoundWithoutStr;
+      } else {
+        // entamer ailleurs est OK si on n’a pas de fortes en foundSuit
+        return 0.0;
+      }
+    }
+
+    final bool followingFound = (leadSuit == foundSuit);
+    if (followingFound) {
+      if (play.suit != foundSuit) return 0.0; // pas la bonne couleur, logique existante gère déjà
+      // si on peut GAGNER sur foundSuit avec une forte, on valorise
+      final lead = s.currentTrick.first;
+      final bool beats = (play.suit == lead.suit) && (rankStrength(play) > rankStrength(lead));
+      if (isStrongInFound(play) && beats) return bonusTakeOnFoundWhenFollow;
+      // sinon, encourager un petit dump pour ne pas nourrir la couleur adverse
+      return bonusDumpSmallOnFound;
+    } else {
+       if (play.suit == foundSuit && isStrongInFound(play)) return penaltyWasteFoundOffLead;
+      return 0.0;
+    }
+  }
+
 
   Timer? _botTimer;
   bool _botPaused = false;

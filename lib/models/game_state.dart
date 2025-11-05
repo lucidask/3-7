@@ -4,50 +4,31 @@ import 'player_model.dart';
 import 'game_mode.dart';
 
 class GameState {
-  // Joueurs & scores cumulés
   final List<PlayerModel> players;
-  final Map<String, int> scores; // playerId -> points cumulés
-
-  // Cartes & état du tour
-  final List<CardModel> deck;                 // pioche restante
-  final Map<String, List<CardModel>> hands;   // mains en cours (playerId -> cartes)
+  final Map<String, int> scores;
+  final List<CardModel> deck;
+  final Map<String, List<CardModel>> hands;
   final List<CardModel> currentTrick;
-  final List<String> currentTrickOwners;// cartes posées dans le pli courant
-  final bool drawPileAvailable;               // tant qu’il y a de la pioche
-  final int currentTurnIndex;                 // index dans players (qui joue)
-
-  // Mode / tour / info
+  final List<String> currentTrickOwners;
+  final bool drawPileAvailable;
+  final int currentTurnIndex;
   final GameMode mode;
   final int startingPlayerIndex;
   final String infoMessage;
   final int roundNo;
-
-  // Pli précédent
   final List<CardModel> lastTrick;
   final int? lastTrickWinnerIndex;
-
-  // Piles gagnées (en cours de manche)
-  final Map<String, List<CardModel>> wonCards; // playerId -> cartes remportées
-
-  // Snapshot des cartes gagnées à la FIN de la manche (pour affichage)
+  final Map<String, List<CardModel>> wonCards;
   final Map<String, List<CardModel>> lastRoundWonCards;
-
-  // Résumé de la dernière manche
-  final Map<String, int> lastRoundPoints;      // points par joueur pour la manche terminée
-  final String? lastRoundWinnerId;             // gagnant de la manche (null si égalité)
-
-  // Suivi de la progression (victoires consécutives) et fin de match
-  final Map<String, int> consecutiveWins; // victoires de manche consécutives
+  final Map<String, int> lastRoundPoints;
+  final String? lastRoundWinnerId;
+  final Map<String, int> consecutiveWins;
   final bool matchOver;
   final String? winnerId;
-
-  // "Trouver" (bandeau éphémère)
   final bool findJustHappened;
   final String? findPlayerId;
   final Suit? findSuit;
   final bool? findIsStrong;
-
-  // Difficulte du bot & mémoire des cartes vues
   final BotDifficulty botDifficulty;
   final Map<Suit, Set<Rank>> seenCards;
 

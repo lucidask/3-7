@@ -3,7 +3,6 @@ import '../models/card_model.dart';
 import '../theme/card_back_theme.dart';
 import '../utils/card_format.dart' show suitSymbol, rankLabel;
 
-
 class MiniCardWidget extends StatelessWidget {
   final CardModel card;
 

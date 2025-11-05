@@ -4,42 +4,21 @@ import 'mini_card_widget.dart';
 
 typedef CardTap = void Function(CardModel card);
 
-/// Main de cartes en éventail (chevauchement) SANS scroll.
-/// - Ajuste overlap/scale pour faire tenir toutes les cartes.
-/// - Validation visuelle: NE JAMAIS griser quand faceDown == true.
 class HandView extends StatelessWidget {
   final List<CardModel> cards;
   final bool enabled;
   final CardTap onTap;
-
-  /// Validation par carte. Si null => toutes jouables (si enabled).
   final bool Function(CardModel card)? isPlayable;
-
-  /// Affiche le dos des cartes (utile pour l’adversaire ou pour masquer).
   final bool faceDown;
-
-  /// Chevauchement "souhaité" (px) entre deux cartes (sera ajusté pour tenir).
   final double desiredOverlap;
-
-  /// Chevauchement minimum (px) pour garder lisible/esthétique.
   final double minOverlap;
-
-  /// Échelle minimale appliquée si trop de cartes pour l’espace.
   final double minScale;
-
-  /// Largeur/hauteur BASE d’une MiniCard (doivent matcher MiniCardWidget).
   final double baseCardWidth;
   final double baseCardHeight;
-
-  /// Alignement horizontal de la main (center par défaut).
   final AlignmentGeometry alignment;
-
-  /// Marge latérale pour aérer la main.
   final double sidePadding;
-
-  /// ⬇️ NOUVEAU : facteur d’échelle externe appliqué avant la mise en page.
-  /// Permet de lier la taille des cartes à la hauteur de la table.
   final double cardScale;
+  final bool Function(CardModel card)? highlightWhen;
 
   const HandView({
     super.key,
@@ -55,8 +34,29 @@ class HandView extends StatelessWidget {
     this.baseCardHeight = 64,
     this.alignment = Alignment.center,
     this.sidePadding = 8,
-    this.cardScale = 1.0, // ← NEW (par défaut inchangé)
+    this.cardScale = 1.0,
+    this.highlightWhen,
+
   });
+
+  Widget _wrapHighlight(BuildContext context, Widget child) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          width: 3,
+          color: Theme.of(context).colorScheme.secondary,
+        ),
+        boxShadow: const [
+          BoxShadow(blurRadius: 10, spreadRadius: 1),
+        ],
+      ),
+      child: child,
+    );
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -64,7 +64,6 @@ class HandView extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Applique l’échelle externe AVANT toute mise en page
         final double bw = (baseCardWidth * cardScale).toDouble();
         final double bh = (baseCardHeight * cardScale).toDouble();
         double dxDesired = (desiredOverlap * cardScale).toDouble();
@@ -75,25 +74,18 @@ class HandView extends StatelessWidget {
             : (bw * cards.length);
 
         final int n = cards.length;
-        double scale = 1.0; // scale interne auto (en plus de cardScale)
+        double scale = 1.0;
         double dx = dxDesired;
-
-        // largeur réellement dispo, hors marges
         final double available = (maxW - 2 * sidePadding).clamp(0.0, double.infinity).toDouble();
-
-        // largeur requise avec chevauchement souhaité
         double widthNeeded = bw + (n - 1) * dx;
 
         if (widthNeeded > available) {
           if (n == 1) {
             scale = (available / bw).clamp(minScale, 1.0).toDouble();
           } else {
-            // Ajuste dx pour tenir, borné par dxMin et dxDesired
             final double dxCandidate =
             ((available - bw) / (n - 1)).clamp(dxMin, dxDesired).toDouble();
             dx = dxCandidate;
-
-            // Recalcule: si ça dépasse encore -> scale interne
             widthNeeded = bw + (n - 1) * dx;
             if (widthNeeded > available) {
               scale = (available / widthNeeded).clamp(minScale, 1.0).toDouble();
@@ -109,45 +101,27 @@ class HandView extends StatelessWidget {
         for (var i = 0; i < n; i++) {
           final card = cards[i];
 
-          // Base: est-ce que la carte est jouable selon ta logique ?
-          final bool playableBase = (isPlayable?.call(card) ?? true);
-
-          // Interactivité réelle: seulement si la main est enabled ET visible (pas faceDown)
-          final bool interactive = enabled && !faceDown && playableBase;
-
-          // IMPORTANT: NE JAMAIS griser quand faceDown == true
-          final bool shouldDim = (!interactive && !faceDown) ? true : false;
-
-          final view = MiniCardWidget(
+          final playable = isPlayable?.call(card) ?? true;
+          Widget base = MiniCardWidget(
             card,
             faceDown: faceDown,
-            dimmed: shouldDim,
+            dimmed: !playable,
           );
+          final isHL = highlightWhen?.call(card) == true;
+          final visual = isHL ? _wrapHighlight(context, base) : base;
 
-          final child = SizedBox(
-            width: cardW,
-            height: cardH,
-            child: Transform.scale(
-              scale: scale,
-              alignment: Alignment.topLeft,
-              child: interactive
-                  ? Material(
-                type: MaterialType.transparency,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(10),
-                  onTap: () => onTap(card),
-                  child: view,
+          children.add(
+            Positioned(
+              left: sidePadding + (i * dx), top: 0.0,
+              child: IgnorePointer(
+                ignoring: !enabled || !playable,
+                child: GestureDetector(
+                  onTap: (enabled && playable) ? () => onTap(card) : null,
+                  child: visual,
                 ),
-              )
-                  : AbsorbPointer(absorbing: true, child: view),
+              ),
             ),
           );
-
-          children.add(Positioned(
-            left: sidePadding + (i * dx),
-            top: 0.0,
-            child: child,
-          ));
         }
 
         final handStack = SizedBox(
